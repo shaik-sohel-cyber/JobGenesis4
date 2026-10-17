@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1791126322839,
+      "tag": "0000_create_interview_reports",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791303449770,
+      "tag": "0001_add_ai_capacity_tracking",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791343719207,
+      "tag": "0002_user_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791359293649,
+      "tag": "0003_role_context_and_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791390825063,
+      "tag": "0004_shareable_report_token",
+      "breakpoints": true
+    }
+  ]
+}

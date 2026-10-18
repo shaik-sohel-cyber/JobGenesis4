@@ -10,9 +10,18 @@ export type AdminUserRow = {
   lastSignInAt: string | null;
 };
 
+export type AdminFeedbackRow = {
+  id: string;
+  rating: number;
+  feature: string;
+  category: string;
+  message: string;
+  contactEmail: string | null;
+  createdAt: string;
+};
+
 export type AdminOverview =
-  | { authorized: false }
-  | { authorized: true; users: AdminUserRow[] };
+  { authorized: false } | { authorized: true; users: AdminUserRow[]; feedback: AdminFeedbackRow[] };
 
 /** Admin-only list of every account with sign-up and last sign-in times. */
 export const getAdminOverview = createServerFn({ method: "POST" })
@@ -41,5 +50,26 @@ export const getAdminOverview = createServerFn({ method: "POST" })
     const names = new Map((profiles ?? []).map((p) => [p.id, p.full_name]));
     for (const u of all) u.fullName = names.get(u.id) || u.fullName;
     all.sort((a, b) => (b.lastSignInAt ?? "").localeCompare(a.lastSignInAt ?? ""));
-    return { authorized: true, users: all };
+    const { data: feedback, error: feedbackError } = await supabaseAdmin
+      .from("feedback_submissions")
+      .select("id, rating, feature, category, message, contact_email, created_at")
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (feedbackError) {
+      console.error("[admin] feedback load failed", feedbackError.message);
+      throw new Error("Couldn't load feedback submissions.");
+    }
+    return {
+      authorized: true,
+      users: all,
+      feedback: feedback.map((item) => ({
+        id: item.id,
+        rating: item.rating,
+        feature: item.feature,
+        category: item.category,
+        message: item.message,
+        contactEmail: item.contact_email,
+        createdAt: item.created_at,
+      })),
+    };
   });

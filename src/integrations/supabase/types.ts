@@ -53,6 +53,39 @@ export type Database = {
         }
         Relationships: []
       }
+      feedback_submissions: {
+        Row: {
+          category: string
+          contact_email: string | null
+          created_at: string
+          feature: string
+          id: string
+          message: string
+          rating: number
+          user_id: string
+        }
+        Insert: {
+          category: string
+          contact_email?: string | null
+          created_at?: string
+          feature: string
+          id?: string
+          message: string
+          rating: number
+          user_id: string
+        }
+        Update: {
+          category?: string
+          contact_email?: string | null
+          created_at?: string
+          feature?: string
+          id?: string
+          message?: string
+          rating?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
       interview_answers: {
         Row: {
           answer_quality: Json | null

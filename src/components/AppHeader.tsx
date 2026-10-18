@@ -67,6 +67,13 @@ export function AppHeader({ variant = "app" }: { variant?: "app" | "public" }) {
                   >
                     Profile & settings
                   </Link>
+                  <Link
+                    to="/feedback"
+                    onClick={() => setOpen(false)}
+                    className="block rounded-lg px-2.5 py-2 text-sm transition-colors hover:bg-secondary"
+                  >
+                    Share feedback
+                  </Link>
                   <button
                     type="button"
                     onClick={signOut}

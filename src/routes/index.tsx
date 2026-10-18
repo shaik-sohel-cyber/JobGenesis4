@@ -71,9 +71,9 @@ function Landing() {
               <span className="text-accent">Prove Your Skills.</span>
             </h1>
             <p className="mt-6 max-w-xl text-lg leading-relaxed text-muted-foreground">
-              Upload your resume, then sit down with an AI interviewer that has actually read it. It asks about your
-              real projects, follows up where your answers are thin, and hands you a report on how you held up —
-              before a real recruiter ever asks.
+              Upload your resume, then sit down with an AI interviewer that has actually read it. It
+              asks about your real projects, follows up where your answers are thin, and hands you a
+              report on how you held up — before a real recruiter ever asks.
             </p>
             <div className="mt-9 flex flex-wrap items-center gap-3">
               <Link
@@ -90,17 +90,18 @@ function Landing() {
               </Link>
             </div>
             <p className="mt-4 text-xs text-muted-foreground">
-              Free while in beta. PDF or Word, up to 10&nbsp;MB. Your resume stays private to your account.
+              Free while in beta. PDF or Word, up to 10&nbsp;MB. Your resume stays private to your
+              account.
             </p>
           </div>
         </section>
 
-        <section className="border-t border-border bg-surface">
+        <section id="features" className="border-t border-border bg-surface">
           <div className="mx-auto max-w-6xl px-5 py-20">
             <h2 className="font-display text-2xl font-semibold">What JobGenesis does</h2>
             <p className="mt-2 max-w-xl text-sm text-muted-foreground">
-              Everything here is live today — built around one idea: an interview that knows your resume as well as
-              you pretend to.
+              Everything here is live today — built around one idea: an interview that knows your
+              resume as well as you pretend to.
             </p>
 
             <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -122,14 +123,23 @@ function Landing() {
           </div>
         </section>
 
-        <section className="mx-auto max-w-6xl px-5 py-20">
+        <section id="how-it-works" className="mx-auto max-w-6xl px-5 py-20">
           <h2 className="font-display text-2xl font-semibold">How it works</h2>
           <ol className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {[
               ["Upload", "Drop in your PDF or Word resume. It's stored privately to your account."],
-              ["Analyze", "Your resume is read and turned into a structured candidate profile in about a minute."],
-              ["Interview", "Talk to the AI voice interviewer — or type. Roughly 15 to 20 minutes, adaptive to your answers."],
-              ["Report", "Get an evidence-based report: what held up, what didn't, and what to sharpen next."],
+              [
+                "Analyze",
+                "Your resume is read and turned into a structured candidate profile in about a minute.",
+              ],
+              [
+                "Interview",
+                "Talk to the AI voice interviewer — or type. Roughly 15 to 20 minutes, adaptive to your answers.",
+              ],
+              [
+                "Report",
+                "Get an evidence-based report: what held up, what didn't, and what to sharpen next.",
+              ],
             ].map(([title, body], i) => (
               <li key={title} className="border-t-2 border-accent/50 pt-4">
                 <span className="font-mono text-xs text-muted-foreground">0{i + 1}</span>
@@ -141,13 +151,67 @@ function Landing() {
         </section>
       </main>
 
-      <footer className="border-t border-border">
-        <div className="mx-auto flex max-w-6xl flex-col gap-2 px-5 py-8 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
+      <footer className="border-t border-border bg-card">
+        <div className="mx-auto grid max-w-6xl gap-8 px-5 py-10 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
             <Wordmark />
-            <span>© {new Date().getFullYear()} JobGenesis</span>
+            <p className="mt-3 max-w-xs text-sm leading-6 text-muted-foreground">
+              Resume intelligence for people who want to be ready.
+            </p>
           </div>
-          <p>Resume intelligence for people who want to be ready.</p>
+          <div>
+            <h2 className="text-sm font-semibold">Explore</h2>
+            <nav
+              aria-label="Footer navigation"
+              className="mt-3 flex flex-col items-start gap-2 text-sm text-muted-foreground"
+            >
+              <a className="transition-colors hover:text-foreground" href="#features">
+                Features
+              </a>
+              <a className="transition-colors hover:text-foreground" href="#how-it-works">
+                How it works
+              </a>
+              {user ? (
+                <Link className="transition-colors hover:text-foreground" to="/feedback">
+                  Share feedback
+                </Link>
+              ) : null}
+            </nav>
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold">Your account</h2>
+            <nav
+              aria-label="Account links"
+              className="mt-3 flex flex-col items-start gap-2 text-sm text-muted-foreground"
+            >
+              {user ? (
+                <Link className="transition-colors hover:text-foreground" to="/dashboard">
+                  Dashboard
+                </Link>
+              ) : (
+                <>
+                  <Link className="transition-colors hover:text-foreground" to="/login">
+                    Log in
+                  </Link>
+                  <Link className="transition-colors hover:text-foreground" to="/signup">
+                    Get started
+                  </Link>
+                </>
+              )}
+            </nav>
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold">Contact Us</h2>
+            <a
+              className="mt-3 inline-block text-sm text-muted-foreground transition-colors hover:text-foreground"
+              href="mailto:jobgenesisai@gmail.com"
+            >
+              jobgenesisai@gmail.com
+            </a>
+          </div>
+          <div className="border-t border-border pt-5 text-xs text-muted-foreground sm:col-span-2 lg:col-span-4">
+            © {new Date().getFullYear()} JobGenesis. All rights reserved.
+          </div>
         </div>
       </footer>
     </div>

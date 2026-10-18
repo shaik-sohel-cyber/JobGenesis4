@@ -15,6 +15,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as AuthenticatedAdminRouteImport } from './routes/_authenticated/admin'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
+import { Route as AuthenticatedFeedbackRouteImport } from './routes/_authenticated/feedback'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
 import { Route as AuthenticatedInterviewIdRouteImport } from './routes/_authenticated/interview.$id'
 import { Route as AuthenticatedReportIdRouteImport } from './routes/_authenticated/report.$id'
@@ -52,6 +53,11 @@ const AuthenticatedAdminRoute = AuthenticatedAdminRouteImport.update({
 const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedFeedbackRoute = AuthenticatedFeedbackRouteImport.update({
+  id: '/feedback',
+  path: '/feedback',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
@@ -108,6 +114,7 @@ export interface FileRoutesByFullPath {
   '/signup': typeof SignupRoute
   '/admin': typeof AuthenticatedAdminRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/feedback': typeof AuthenticatedFeedbackRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/interview/$id': typeof AuthenticatedInterviewIdRoute
   '/report/$id': typeof AuthenticatedReportIdRoute
@@ -124,6 +131,7 @@ export interface FileRoutesByTo {
   '/signup': typeof SignupRoute
   '/admin': typeof AuthenticatedAdminRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/feedback': typeof AuthenticatedFeedbackRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/interview/$id': typeof AuthenticatedInterviewIdRoute
   '/report/$id': typeof AuthenticatedReportIdRoute
@@ -142,6 +150,7 @@ export interface FileRoutesById {
   '/signup': typeof SignupRoute
   '/_authenticated/admin': typeof AuthenticatedAdminRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
+  '/_authenticated/feedback': typeof AuthenticatedFeedbackRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/interview/$id': typeof AuthenticatedInterviewIdRoute
   '/_authenticated/report/$id': typeof AuthenticatedReportIdRoute
@@ -160,6 +169,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/admin'
     | '/dashboard'
+    | '/feedback'
     | '/settings'
     | '/interview/$id'
     | '/report/$id'
@@ -176,6 +186,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/admin'
     | '/dashboard'
+    | '/feedback'
     | '/settings'
     | '/interview/$id'
     | '/report/$id'
@@ -193,6 +204,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/_authenticated/admin'
     | '/_authenticated/dashboard'
+    | '/_authenticated/feedback'
     | '/_authenticated/settings'
     | '/_authenticated/interview/$id'
     | '/_authenticated/report/$id'
@@ -257,6 +269,13 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof AuthenticatedDashboardRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/feedback': {
+      id: '/_authenticated/feedback'
+      path: '/feedback'
+      fullPath: '/feedback'
+      preLoaderRoute: typeof AuthenticatedFeedbackRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/settings': {
@@ -328,6 +347,7 @@ declare module '@tanstack/react-router' {
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedAdminRoute: typeof AuthenticatedAdminRoute
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
+  AuthenticatedFeedbackRoute: typeof AuthenticatedFeedbackRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
   AuthenticatedInterviewIdRoute: typeof AuthenticatedInterviewIdRoute
   AuthenticatedReportIdRoute: typeof AuthenticatedReportIdRoute
@@ -338,6 +358,7 @@ interface AuthenticatedRouteRouteChildren {
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAdminRoute: AuthenticatedAdminRoute,
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
+  AuthenticatedFeedbackRoute: AuthenticatedFeedbackRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
   AuthenticatedInterviewIdRoute: AuthenticatedInterviewIdRoute,
   AuthenticatedReportIdRoute: AuthenticatedReportIdRoute,

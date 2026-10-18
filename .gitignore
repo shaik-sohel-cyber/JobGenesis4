@@ -51,3 +51,5 @@ id_ed25519*
 *.njsproj
 *.sln
 *.sw?
+
+supabase/.temp/

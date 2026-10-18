@@ -3,6 +3,7 @@ import { BrowserSpeechProvider, ServerSpeechProvider, transcribeSegment } from "
 import { voiceConfig, type SttProviderId, type VoiceProviderId } from "./voiceConfig";
 
 export type ProviderStatus = { provider: VoiceProviderId | "auto"; reconnecting: boolean };
+export type SpeechResult = "completed" | "interrupted" | "unavailable";
 
 /**
  * Tries the configured voice and transcription providers in order. Unavailable
@@ -14,6 +15,7 @@ export class VoiceProviderManager {
   private idx = 0;
   private sttIdx = 0;
   private ready: Promise<void> | null = null;
+  private speechGeneration = 0;
   constructor(private interviewId: string, private onStatus: (s: ProviderStatus) => void) {}
   get current() {
     return this.chain[this.idx];
@@ -37,34 +39,43 @@ export class VoiceProviderManager {
     await this.current?.connect().catch(() => {});
   }
   /** Returns false when no voice service could speak (the text stays on screen). */
-  async speak(text: string): Promise<boolean> {
+  async speak(text: string): Promise<SpeechResult> {
     await this.init();
+    const generation = ++this.speechGeneration;
+    await this.current?.interrupt();
+    if (generation !== this.speechGeneration) return "interrupted";
     let retried = false;
     while (this.current) {
       try {
         await this.current.speak(text);
+        if (generation !== this.speechGeneration) return "interrupted";
         this.emit(false);
-        return true;
+        return "completed";
       } catch (e) {
+        if (generation !== this.speechGeneration) return "interrupted";
         const kind = e instanceof VoiceProviderError ? e.kind : "unavailable";
         if (kind === "auth") throw e;
         if (!retried && kind === "network") {
           retried = true;
           this.emit(true);
           await new Promise((r) => setTimeout(r, 1200));
+          if (generation !== this.speechGeneration) return "interrupted";
           continue;
         }
-        await this.current.disconnect().catch(() => {});
-        if (this.idx >= this.chain.length - 1) return false;
+        void this.current.interrupt();
+        if (generation !== this.speechGeneration) return "interrupted";
+        if (this.idx >= this.chain.length - 1) return "unavailable";
         this.idx++;
         retried = false;
         this.emit(true);
         await this.current.connect().catch(() => {});
+        if (generation !== this.speechGeneration) return "interrupted";
       }
     }
-    return false;
+    return "unavailable";
   }
-  interrupt() {
+  async interrupt() {
+    this.speechGeneration += 1;
     return this.current?.interrupt();
   }
   async transcribe(audio: Blob, onPartial: (t: string) => void): Promise<string> {
@@ -89,6 +100,7 @@ export class VoiceProviderManager {
     }
   }
   async disconnect() {
+    this.speechGeneration += 1;
     for (const p of this.chain) await p.disconnect().catch(() => {});
   }
 }

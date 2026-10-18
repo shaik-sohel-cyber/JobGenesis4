@@ -15,7 +15,7 @@ export interface VoiceProvider {
 }
 
 export class VoiceProviderError extends Error {
-  constructor(public kind: "rate_limit" | "unavailable" | "network" | "auth", message = kind) {
+  constructor(public kind: "rate_limit" | "unavailable" | "network" | "auth", message: string = kind) {
     super(message);
   }
 }

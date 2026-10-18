@@ -37,7 +37,10 @@ export function enabledProviders(): EnabledProviders {
 }
 
 export class UpstreamError extends Error {
-  constructor(public status: number, msg: string) {
+  constructor(
+    public status: number,
+    msg: string,
+  ) {
     super(msg);
   }
 }
@@ -64,15 +67,53 @@ const byte = (arr: Uint8Array, i: number) => arr[i] ?? 0;
 
 /** Extracts the PCM payload from a RIFF/WAVE buffer, skipping any metadata chunks before "data". */
 export function stripWavHeader(wav: Uint8Array): Uint8Array {
-  const u32 = (p: number) => byte(wav, p) | (byte(wav, p + 1) << 8) | (byte(wav, p + 2) << 16) | (byte(wav, p + 3) << 24);
-  let pos = 12; // skip "RIFF", size, "WAVE"
-  while (pos + 8 <= wav.length) {
-    const id = String.fromCharCode(byte(wav, pos), byte(wav, pos + 1), byte(wav, pos + 2), byte(wav, pos + 3));
-    const size = u32(pos + 4);
-    if (id === "data") return wav.subarray(pos + 8, Math.min(pos + 8 + size, wav.length));
-    pos += 8 + size + (size % 2);
+  const u32 = (p: number) =>
+    byte(wav, p) | (byte(wav, p + 1) << 8) | (byte(wav, p + 2) << 16) | (byte(wav, p + 3) << 24);
+  const tag = (p: number) =>
+    String.fromCharCode(byte(wav, p), byte(wav, p + 1), byte(wav, p + 2), byte(wav, p + 3));
+  if (wav.length < 12 || tag(0) !== "RIFF" || tag(8) !== "WAVE") {
+    throw new UpstreamError(502, "unsupported WAV container");
   }
-  return wav.subarray(44);
+  let pos = 12;
+  let pcmFormat: {
+    encoding: number;
+    channels: number;
+    sampleRate: number;
+    bitsPerSample: number;
+  } | null = null;
+  let dataOffset = -1;
+  let dataLength = 0;
+  while (pos + 8 <= wav.length) {
+    const id = tag(pos);
+    const size = u32(pos + 4) >>> 0;
+    const start = pos + 8;
+    if (start + size > wav.length) throw new UpstreamError(502, "truncated WAV chunk");
+    if (id === "fmt " && size >= 16) {
+      const view = new DataView(wav.buffer, wav.byteOffset + start, size);
+      pcmFormat = {
+        encoding: view.getUint16(0, true),
+        channels: view.getUint16(2, true),
+        sampleRate: view.getUint32(4, true),
+        bitsPerSample: view.getUint16(14, true),
+      };
+    } else if (id === "data") {
+      dataOffset = start;
+      dataLength = size;
+    }
+    pos = start + size + (size % 2);
+  }
+  if (
+    !pcmFormat ||
+    pcmFormat.encoding !== 1 ||
+    pcmFormat.channels !== 1 ||
+    pcmFormat.sampleRate !== 24000 ||
+    pcmFormat.bitsPerSample !== 16 ||
+    dataOffset < 0 ||
+    dataLength % 2 !== 0
+  ) {
+    throw new UpstreamError(502, "unsupported WAV PCM format");
+  }
+  return wav.subarray(dataOffset, dataOffset + dataLength);
 }
 
 const esc = (s: string) => s.replace(/[<>&'"]/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -87,29 +128,51 @@ export async function synthesize(
       // Kokoro is served on fal.ai behind the Hugging Face router: submit → poll → fetch WAV.
       const tok = env("HUGGINGFACE_API_KEY");
       const res = await ok(
-        await fetch(`https://router.huggingface.co/fal-ai/${voiceConfig.kokoro.model}?_subdomain=queue`, {
-          method: "POST",
-          signal,
-          headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ text, voice: voiceConfig.kokoro.voice, audio_format: "wav", speed: voiceConfig.kokoro.speed }),
-        }),
+        await fetch(
+          `https://router.huggingface.co/fal-ai/${voiceConfig.kokoro.model}?_subdomain=queue`,
+          {
+            method: "POST",
+            signal,
+            headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text,
+              voice: voiceConfig.kokoro.voice,
+              audio_format: "wav",
+              speed: voiceConfig.kokoro.speed,
+            }),
+          },
+        ),
         "kokoro",
       );
-      const { request_id, response_url } = (await res.json()) as { request_id?: string; response_url?: string };
+      const { request_id, response_url } = (await res.json()) as {
+        request_id?: string;
+        response_url?: string;
+      };
       if (!request_id || !response_url) throw new UpstreamError(502, "kokoro");
       // fal's queue URLs reject HF tokens; the router proxies them (with the query the client uses).
-      const proxied = (u: string) => `${u.replace("https://queue.fal.run", "https://router.huggingface.co/fal-ai")}?_subdomain=queue`;
+      const proxied = (u: string) =>
+        `${u.replace("https://queue.fal.run", "https://router.huggingface.co/fal-ai")}?_subdomain=queue`;
       const deadline = Date.now() + 45_000;
       let status = "";
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 700));
-        const s = await ok(await fetch(proxied(`${response_url}/status`), { headers: { Authorization: `Bearer ${tok}` }, signal }), "kokoro");
+        const s = await ok(
+          await fetch(proxied(`${response_url}/status`), {
+            headers: { Authorization: `Bearer ${tok}` },
+            signal,
+          }),
+          "kokoro",
+        );
         status = ((await s.json()) as { status?: string }).status ?? "";
         if (status === "COMPLETED") break;
-        if (status !== "IN_QUEUE" && status !== "IN_PROGRESS") throw new UpstreamError(502, "kokoro");
+        if (status !== "IN_QUEUE" && status !== "IN_PROGRESS")
+          throw new UpstreamError(502, "kokoro");
       }
       if (status !== "COMPLETED") throw new UpstreamError(504, "kokoro");
-      const done = await ok(await fetch(proxied(response_url), { headers: { Authorization: `Bearer ${tok}` }, signal }), "kokoro");
+      const done = await ok(
+        await fetch(proxied(response_url), { headers: { Authorization: `Bearer ${tok}` }, signal }),
+        "kokoro",
+      );
       const { audio } = (await done.json()) as { audio?: { url?: string } };
       if (!audio?.url) throw new UpstreamError(502, "kokoro");
       const wavRes = await ok(await fetch(audio.url, { signal }), "kokoro");
@@ -120,7 +183,11 @@ export async function synthesize(
         await fetch("https://api.cartesia.ai/tts/bytes", {
           method: "POST",
           signal,
-          headers: { "X-API-Key": env("CARTESIA_API_KEY"), "Cartesia-Version": "2025-04-16", "Content-Type": "application/json" },
+          headers: {
+            "X-API-Key": env("CARTESIA_API_KEY"),
+            "Cartesia-Version": "2025-04-16",
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify({
             model_id: voiceConfig.cartesia.model,
             transcript: text,
@@ -140,7 +207,10 @@ export async function synthesize(
           {
             method: "POST",
             signal,
-            headers: { "xi-api-key": env("ELEVENLABS_API_KEY"), "Content-Type": "application/json" },
+            headers: {
+              "xi-api-key": env("ELEVENLABS_API_KEY"),
+              "Content-Type": "application/json",
+            },
             body: JSON.stringify({ text, model_id: voiceConfig.elevenlabs.model }),
           },
         ),
@@ -155,7 +225,10 @@ export async function synthesize(
           {
             method: "POST",
             signal,
-            headers: { Authorization: `Token ${env("DEEPGRAM_API_KEY")}`, "Content-Type": "application/json" },
+            headers: {
+              Authorization: `Token ${env("DEEPGRAM_API_KEY")}`,
+              "Content-Type": "application/json",
+            },
             body: JSON.stringify({ text }),
           },
         ),
@@ -165,16 +238,22 @@ export async function synthesize(
     }
     case "google": {
       const res = await ok(
-        await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${env("GOOGLE_TTS_API_KEY")}`, {
-          method: "POST",
-          signal,
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            input: { text },
-            voice: { languageCode: voiceConfig.google.languageCode, name: voiceConfig.google.voice },
-            audioConfig: { audioEncoding: "LINEAR16", sampleRateHertz: 24000 },
-          }),
-        }),
+        await fetch(
+          `https://texttospeech.googleapis.com/v1/text:synthesize?key=${env("GOOGLE_TTS_API_KEY")}`,
+          {
+            method: "POST",
+            signal,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              input: { text },
+              voice: {
+                languageCode: voiceConfig.google.languageCode,
+                name: voiceConfig.google.voice,
+              },
+              audioConfig: { audioEncoding: "LINEAR16", sampleRateHertz: 24000 },
+            }),
+          },
+        ),
         "google",
       );
       const { audioContent } = (await res.json()) as { audioContent: string };
@@ -206,12 +285,32 @@ export async function synthesize(
 /** Wraps a raw PCM stream into the SSE shape the browser already plays. */
 export function pcmToSSE(pcm: ReadableStream<Uint8Array>) {
   const enc = new TextEncoder();
+  const frameBytes = 9600;
+  const encodeFrame = (frame: Uint8Array) => {
+    let bin = "";
+    for (let i = 0; i < frame.length; i += 0x8000)
+      bin += String.fromCharCode(...frame.subarray(i, i + 0x8000));
+    return enc.encode(
+      `data: ${JSON.stringify({ type: "speech.audio.delta", audio: btoa(bin) })}\n\n`,
+    );
+  };
+  let pending = new Uint8Array(0);
   return pcm.pipeThrough(
     new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, c) {
-        let bin = "";
-        for (let i = 0; i < chunk.length; i += 0x8000) bin += String.fromCharCode(...chunk.subarray(i, i + 0x8000));
-        c.enqueue(enc.encode(`data: ${JSON.stringify({ type: "speech.audio.delta", audio: btoa(bin) })}\n\n`));
+        const bytes = new Uint8Array(pending.length + chunk.length);
+        bytes.set(pending);
+        bytes.set(chunk, pending.length);
+        let offset = 0;
+        while (bytes.length - offset >= frameBytes) {
+          c.enqueue(encodeFrame(bytes.subarray(offset, offset + frameBytes)));
+          offset += frameBytes;
+        }
+        pending = bytes.slice(offset);
+      },
+      flush(c) {
+        if (pending.length % 2 !== 0) throw new UpstreamError(502, "incomplete PCM sample");
+        if (pending.length) c.enqueue(encodeFrame(pending));
       },
     }),
   );

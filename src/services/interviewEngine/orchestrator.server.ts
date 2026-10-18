@@ -25,7 +25,9 @@ function quickAnalysis(transcript: string) {
     quality: thin ? "weak" : "adequate",
     follow_up_required: thin,
     follow_up_reason: thin ? "The answer was brief; invite more concrete detail" : "",
-    recommended_direction: thin ? "Ask for a specific example, their exact role, and how it was implemented" : "",
+    recommended_direction: thin
+      ? "Ask for a specific example, their exact role, and how it was implemented"
+      : "",
     contradictions: [] as string[],
     unsupported_claims: [] as string[],
   };
@@ -41,14 +43,21 @@ type Interview = { id: string; resume_id: string; status: string };
 
 /** Planning: builds and stores the blueprint. Idempotent. */
 export async function runPlanning(db: DB, interview: Interview) {
+  if (interview.status === "ready" || interview.status === "in_progress") return;
   const { count } = await db
     .from("interview_blueprints")
     .select("id", { count: "exact", head: true })
     .eq("interview_id", interview.id);
   if ((count ?? 0) > 0) return;
 
-  await db.from("interviews").update({ status: "planning", error_message: null }).eq("id", interview.id);
-  const [ctx, role] = await Promise.all([loadResumeContext(db, interview.resume_id), loadRoleContext(db, interview.id)]);
+  await db
+    .from("interviews")
+    .update({ status: "planning", error_message: null })
+    .eq("id", interview.id);
+  const [ctx, role] = await Promise.all([
+    loadResumeContext(db, interview.resume_id),
+    loadRoleContext(db, interview.id),
+  ]);
   const plan = await createInterviewBlueprint(ctx, roleBlock(role));
   const rows = plan.items.map((item, i) => ({
     interview_id: interview.id,
@@ -56,7 +65,8 @@ export async function runPlanning(db: DB, interview: Interview) {
     objective: item.objective,
     target_skill: item.target_skill,
     target_project: item.target_project,
-    target_claim_id: item.target_claim_index !== null ? ctx.claims[item.target_claim_index]!.id : null,
+    target_claim_id:
+      item.target_claim_index !== null ? ctx.claims[item.target_claim_index]!.id : null,
     difficulty: item.difficulty,
     order_index: i,
     status: "pending",
@@ -69,13 +79,19 @@ export async function runPlanning(db: DB, interview: Interview) {
       status: "ready",
       mode: plan.mode,
       current_stage: rows[0]?.stage ?? null,
-      required_skills: [...new Set(plan.required_skills.map((s) => s.trim()).filter(Boolean))].slice(0, 15),
+      required_skills: [
+        ...new Set(plan.required_skills.map((s) => s.trim()).filter(Boolean)),
+      ].slice(0, 15),
     })
     .eq("id", interview.id);
 }
 
 /** Analyzes any answered question whose analysis is missing (also used for retries). */
-export async function runPendingAnalysis(db: DB, interview: Interview, opts: { skipLatest?: boolean } = {}) {
+export async function runPendingAnalysis(
+  db: DB,
+  interview: Interview,
+  opts: { skipLatest?: boolean } = {},
+) {
   const ctx = await loadResumeContext(db, interview.resume_id);
   const state = await loadInterviewState(db, interview.id, ctx.candidateName);
   const latestId = state.questions.at(-1)?.id;
@@ -84,7 +100,9 @@ export async function runPendingAnalysis(db: DB, interview: Interview, opts: { s
     const a = state.answerByQ.get(q.id);
     // The greeting (no blueprint item) is small talk: stored and shown, never analyzed.
     if (!a || a.answer_quality || !q.blueprint_id) continue;
-    const claim = q.target_claim_id ? ctx.claims.find((c) => c.id === q.target_claim_id)?.claim ?? null : null;
+    const claim = q.target_claim_id
+      ? (ctx.claims.find((c) => c.id === q.target_claim_id)?.claim ?? null)
+      : null;
     const history = state.transcriptText.split(`Interviewer: ${q.question}`)[0] ?? "";
     const analysis = await analyzeInterviewAnswer({
       question: q.question,
@@ -94,7 +112,12 @@ export async function runPendingAnalysis(db: DB, interview: Interview, opts: { s
       resumeSummary: ctx.summary,
       transcriptText: history,
     });
-    await recordEvidence(db, { interviewId: interview.id, questionId: q.id, claimId: q.target_claim_id, analysis });
+    await recordEvidence(db, {
+      interviewId: interview.id,
+      questionId: q.id,
+      claimId: q.target_claim_id,
+      analysis,
+    });
     const { error } = await db
       .from("interview_answers")
       .update({
@@ -107,54 +130,81 @@ export async function runPendingAnalysis(db: DB, interview: Interview, opts: { s
   }
 }
 
+export type NextInterviewQuestion = { id: string; text: string; closing: boolean };
+
 /** Decides and writes the next single question, or completes the interview. */
 export async function runNextQuestion(db: DB, interview: Interview) {
-  const ctx = await loadResumeContext(db, interview.resume_id);
-  const state = await loadInterviewState(db, interview.id, ctx.candidateName);
+  const [ctx, state, role] = await Promise.all([
+    loadResumeContext(db, interview.resume_id),
+    loadInterviewState(db, interview.id, null),
+    loadRoleContext(db, interview.id),
+  ]);
+  state.candidateName = ctx.candidateName;
   const last = state.questions.at(-1);
-  if (last && (!state.answerByQ.has(last.id) || last.category === "closing")) return; // already waiting
+  if (last && (!state.answerByQ.has(last.id) || last.category === "closing")) {
+    return { id: last.id, text: last.question, closing: last.category === "closing" }; // already waiting
+  }
 
   // First turn: open with the greeting before touching the blueprint.
   if (!last) {
-    const { count } = await db
+    const { data: existing, error: lookupError } = await db
       .from("interview_questions")
-      .select("id", { count: "exact", head: true })
+      .select("id, question, category")
       .eq("interview_id", interview.id)
-      .eq("sequence_number", 1);
-    if ((count ?? 0) > 0) return; // a concurrent call already opened
-    const { error } = await db.from("interview_questions").insert({
-      interview_id: interview.id,
-      question: greetingText(ctx.candidateName),
-      category: "introduction",
-      difficulty: "easy",
-      sequence_number: 1,
-      depth_level: 1,
-    });
+      .eq("sequence_number", 1)
+      .maybeSingle();
+    if (lookupError) throw new Error(`greeting lookup: ${lookupError.message}`);
+    if (existing) {
+      return { id: existing.id, text: existing.question, closing: existing.category === "closing" };
+    }
+    const { data: greeting, error } = await db
+      .from("interview_questions")
+      .insert({
+        interview_id: interview.id,
+        question: greetingText(ctx.candidateName),
+        category: "introduction",
+        difficulty: "easy",
+        sequence_number: 1,
+        depth_level: 1,
+      })
+      .select("id, question, category")
+      .single();
     if (error) throw new Error(`greeting insert: ${error.message}`);
     await db
       .from("interviews")
       .update({ status: "in_progress", current_stage: "introduction", error_message: null })
       .eq("id", interview.id);
-    return;
+    return { id: greeting.id, text: greeting.question, closing: greeting.category === "closing" };
   }
 
   // Speed: the deep analysis of the latest answer runs after the next question is asked.
   // Until it lands, a cheap length heuristic decides whether to probe deeper.
   const lastAnswer = state.answerByQ.get(last.id);
   const lastAnalysis =
-    (lastAnswer?.answer_quality as AnswerAnalysis | null) ?? (last.blueprint_id ? quickAnalysis(lastAnswer?.transcript ?? "") : null);
+    (lastAnswer?.answer_quality as AnswerAnalysis | null) ??
+    (last.blueprint_id ? quickAnalysis(lastAnswer?.transcript ?? "") : null);
   let active = state.blueprint.find((b) => b.status === "active") ?? null;
   const pending = state.blueprint.filter((b) => b.status === "pending");
-  const followUpsOnItem = active ? state.questions.filter((q) => q.blueprint_id === active!.id && q.parent_question_id).length : 0;
+  const followUpsOnItem = active
+    ? state.questions.filter((q) => q.blueprint_id === active!.id && q.parent_question_id).length
+    : 0;
 
-  const importantClaimIds = new Set(ctx.claims.filter((c) => c.verification_priority === "high").map((c) => c.id));
+  const importantClaimIds = new Set(
+    ctx.claims.filter((c) => c.verification_priority === "high").map((c) => c.id),
+  );
   const settled = new Set(
     state.claimStatus
-      .filter((c) => c.status === "Supported by interview evidence" || c.status === "Partially demonstrated")
+      .filter(
+        (c) =>
+          c.status === "Supported by interview evidence" || c.status === "Partially demonstrated",
+      )
       .map((c) => c.claim_id),
   );
   const unverifiedImportant = state.blueprint.filter(
-    (b) => b.target_claim_id && importantClaimIds.has(b.target_claim_id) && !settled.has(b.target_claim_id),
+    (b) =>
+      b.target_claim_id &&
+      importantClaimIds.has(b.target_claim_id) &&
+      !settled.has(b.target_claim_id),
   ).length;
 
   const step = last
@@ -170,21 +220,36 @@ export async function runNextQuestion(db: DB, interview: Interview) {
 
   if (step.kind === "finish") {
     await runPendingAnalysis(db, interview); // the report needs every answer analyzed
-    if (active) await db.from("interview_blueprints").update({ status: "completed" }).eq("id", active.id);
-    await db.from("interview_blueprints").update({ status: "skipped" }).eq("interview_id", interview.id).eq("status", "pending");
-    await db.from("interview_questions").insert({
-      interview_id: interview.id,
-      question: CLOSING_TEXT,
-      category: "closing",
-      difficulty: "easy",
-      sequence_number: state.questions.length + 1,
-      depth_level: 1,
-    });
+    if (active)
+      await db.from("interview_blueprints").update({ status: "completed" }).eq("id", active.id);
+    await db
+      .from("interview_blueprints")
+      .update({ status: "skipped" })
+      .eq("interview_id", interview.id)
+      .eq("status", "pending");
+    const { data: closing, error } = await db
+      .from("interview_questions")
+      .insert({
+        interview_id: interview.id,
+        question: CLOSING_TEXT,
+        category: "closing",
+        difficulty: "easy",
+        sequence_number: state.questions.length + 1,
+        depth_level: 1,
+      })
+      .select("id, question, category")
+      .single();
+    if (error) throw new Error(`closing insert: ${error.message}`);
     await db
       .from("interviews")
-      .update({ status: "completed", current_stage: "closing", ended_at: new Date().toISOString(), error_message: null })
+      .update({
+        status: "completed",
+        current_stage: "closing",
+        ended_at: new Date().toISOString(),
+        error_message: null,
+      })
       .eq("id", interview.id);
-    return;
+    return { id: closing.id, text: closing.question, closing: true };
   }
 
   let depth = 1;
@@ -193,50 +258,75 @@ export async function runNextQuestion(db: DB, interview: Interview) {
     depth = step.depth;
     followUp = { reason: step.reason, direction: step.direction };
   } else {
-    if (active) await db.from("interview_blueprints").update({ status: "completed" }).eq("id", active.id);
+    if (active)
+      await db.from("interview_blueprints").update({ status: "completed" }).eq("id", active.id);
     // If blueprint is exhausted but minimum not reached, reopen a technical-depth pass on the last item.
-    active = pending[0] ?? state.blueprint.filter((b) => b.stage !== "introduction").at(-1) ?? state.blueprint.at(-1) ?? null;
+    active =
+      pending[0] ??
+      state.blueprint.filter((b) => b.stage !== "introduction").at(-1) ??
+      state.blueprint.at(-1) ??
+      null;
     if (!active) throw new Error("empty blueprint");
     await db.from("interview_blueprints").update({ status: "active" }).eq("id", active.id);
     const asked = state.questions.filter((q) => q.blueprint_id === active!.id);
-    depth = asked.length ? Math.min(6, Math.max(...asked.map((q) => q.depth_level)) + 1) : active.stage === "technical_depth" ? 3 : 1;
+    depth = asked.length
+      ? Math.min(6, Math.max(...asked.map((q) => q.depth_level)) + 1)
+      : active.stage === "technical_depth"
+        ? 3
+        : 1;
   }
 
-  const claim = active.target_claim_id ? ctx.claims.find((c) => c.id === active!.target_claim_id)?.claim ?? null : null;
-  const role = await loadRoleContext(db, interview.id);
+  const claim = active.target_claim_id
+    ? (ctx.claims.find((c) => c.id === active!.target_claim_id)?.claim ?? null)
+    : null;
   const q = await generateInterviewQuestion({
     state,
-    resumeSummary: ctx.summary,
-    role: roleBlock(role),
-    item: { stage: active.stage, objective: active.objective, target_skill: active.target_skill, target_project: active.target_project, claim },
+    resumeContext: ctx,
+    role: roleBlock(role, 2000),
+    item: {
+      stage: active.stage,
+      objective: active.objective,
+      target_skill: active.target_skill,
+      target_project: active.target_project,
+      claim,
+    },
     depthLevel: depth,
     followUp,
   });
 
   // Guard against a concurrent duplicate.
-  const { count } = await db
+  const { data: existing, error: lookupError } = await db
     .from("interview_questions")
-    .select("id", { count: "exact", head: true })
+    .select("id, question, category")
     .eq("interview_id", interview.id)
-    .eq("sequence_number", state.questions.length + 1);
-  if ((count ?? 0) > 0) return;
+    .eq("sequence_number", state.questions.length + 1)
+    .maybeSingle();
+  if (lookupError) throw new Error(`question lookup: ${lookupError.message}`);
+  if (existing) {
+    return { id: existing.id, text: existing.question, closing: existing.category === "closing" };
+  }
 
-  const { error } = await db.from("interview_questions").insert({
-    interview_id: interview.id,
-    blueprint_id: active.id,
-    parent_question_id: followUp ? last!.id : null,
-    question: q.question,
-    category: followUp && q.category !== "clarification" ? "follow_up" : q.category,
-    difficulty: q.difficulty,
-    objective: active.objective,
-    target_skill: active.target_skill,
-    target_claim_id: active.target_claim_id,
-    depth_level: depth,
-    sequence_number: state.questions.length + 1,
-  });
+  const { data: question, error } = await db
+    .from("interview_questions")
+    .insert({
+      interview_id: interview.id,
+      blueprint_id: active.id,
+      parent_question_id: followUp ? last!.id : null,
+      question: q.question,
+      category: followUp && q.category !== "clarification" ? "follow_up" : q.category,
+      difficulty: q.difficulty,
+      objective: active.objective,
+      target_skill: active.target_skill,
+      target_claim_id: active.target_claim_id,
+      depth_level: depth,
+      sequence_number: state.questions.length + 1,
+    })
+    .select("id, question, category")
+    .single();
   if (error) throw new Error(`question insert: ${error.message}`);
   await db
     .from("interviews")
     .update({ status: "in_progress", current_stage: active.stage, error_message: null })
     .eq("id", interview.id);
+  return { id: question.id, text: question.question, closing: question.category === "closing" };
 }

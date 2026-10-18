@@ -8,21 +8,53 @@ async function authHeader() {
   return { Authorization: `Bearer ${data.session?.access_token ?? ""}` };
 }
 
+type VoiceEvent = {
+  type?: unknown;
+  delta?: unknown;
+  text?: unknown;
+  error?: unknown;
+  audio?: unknown;
+};
+
 function errFor(status: number) {
   if (status === 401) return new VoiceProviderError("auth");
   if (status === 429) return new VoiceProviderError("rate_limit");
   return new VoiceProviderError("unavailable");
 }
 
-async function readSSE(res: Response, onEvent: (p: any) => void) {
-  const parser = createParser({ onEvent: (e) => onEvent(JSON.parse(e.data)) });
-  const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
-  while (true) {
-    const n = await reader.read();
-    if (n.done) break;
-    parser.feed(n.value);
+async function readSSE(res: Response, onEvent: (payload: VoiceEvent) => void) {
+  if (!res.headers.get("content-type")?.toLowerCase().includes("text/event-stream") || !res.body) {
+    throw new VoiceProviderError("unavailable", "Unexpected voice response format.");
+  }
+  const parser = createParser({
+    onEvent: (event) => {
+      if (event.data === "[DONE]") return;
+      let payload: unknown;
+      try {
+        payload = JSON.parse(event.data);
+      } catch {
+        throw new VoiceProviderError("unavailable", "Malformed voice event.");
+      }
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        throw new VoiceProviderError("unavailable", "Malformed voice event.");
+      }
+      onEvent(payload as VoiceEvent);
+    },
+  });
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      parser.feed(next.value);
+    }
+  } finally {
+    reader.releaseLock();
   }
 }
+
+const STT_TIMEOUT_MS = 75_000;
+const TTS_TIMEOUT_MS = 55_000;
 
 /** Transcribes one segment with the given speech-to-text service (server-side keys). */
 export async function transcribeSegment(
@@ -35,23 +67,43 @@ export async function transcribeSegment(
   form.append("interviewId", interviewId);
   form.append("provider", provider);
   form.append("file", new File([audio], "answer.webm", { type: "audio/webm" }));
-  let res: Response;
+  const startedAt = performance.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), STT_TIMEOUT_MS);
   try {
-    res = await fetch("/api/voice/transcribe", { method: "POST", headers: await authHeader(), body: form });
-  } catch {
+    const res = await fetch("/api/voice/transcribe", {
+      method: "POST",
+      headers: await authHeader(),
+      body: form,
+      signal: controller.signal,
+    });
+    if (!res.ok) throw errFor(res.status);
+    let text = "";
+    let final: string | null = null;
+    await readSSE(res, (payload) => {
+      if (payload.type === "transcript.text.delta") {
+        if (typeof payload.delta !== "string") throw new VoiceProviderError("unavailable", "Malformed transcript event.");
+        text += payload.delta;
+        onPartial(text);
+      } else if (payload.type === "transcript.text.done") {
+        if (payload.text != null && typeof payload.text !== "string")
+          throw new VoiceProviderError("unavailable", "Malformed transcript event.");
+        final = (payload.text as string | null | undefined) ?? text;
+      } else if (payload.type === "error" || payload.error) {
+        throw new VoiceProviderError("unavailable");
+      }
+    });
+    const transcript = (final ?? text).trim();
+    if (!transcript) throw new VoiceProviderError("unavailable", "No speech was detected.");
+    return transcript;
+  } catch (error) {
+    if (controller.signal.aborted) throw new VoiceProviderError("network", "Transcription timed out.");
+    if (error instanceof VoiceProviderError) throw error;
     throw new VoiceProviderError("network");
+  } finally {
+    clearTimeout(timeout);
+    console.info("[voice-timing] phase=transcription duration_ms=" + Math.round(performance.now() - startedAt));
   }
-  if (!res.ok || !res.body) throw errFor(res.status);
-  let text = "";
-  let final: string | null = null;
-  await readSSE(res, (p) => {
-    if (p.type === "transcript.text.delta" && p.delta) {
-      text += p.delta;
-      onPartial(text);
-    } else if (p.type === "transcript.text.done") final = p.text ?? text;
-    else if (p.type === "error" || p.error) throw new VoiceProviderError("unavailable");
-  });
-  return (final ?? text).trim();
 }
 
 /** Any server-proxied voice (Lovable AI, Cartesia, ElevenLabs, Deepgram, Google, Azure): 24 kHz PCM over SSE. */
@@ -59,6 +111,7 @@ export class ServerSpeechProvider implements VoiceProvider {
   private ctx: AudioContext | null = null;
   private sources = new Set<AudioBufferSourceNode>();
   private abort: AbortController | null = null;
+  private generation = 0;
   constructor(private interviewId: string, public id: Exclude<TtsProviderId, "browser"> | "auto") {}
   isAvailable() {
     return typeof window !== "undefined" && "AudioContext" in window;
@@ -73,37 +126,73 @@ export class ServerSpeechProvider implements VoiceProvider {
     this.ctx = null;
   }
   async interrupt() {
+    this.generation += 1;
+    this.stopActive();
+  }
+  private stopActive() {
     this.abort?.abort();
-    for (const s of this.sources) s.stop();
+    this.abort = null;
+    for (const s of this.sources) {
+      try {
+        s.stop();
+      } catch {
+        // A source can finish between checking the set and stopping it.
+      }
+    }
     this.sources.clear();
   }
   async speak(text: string) {
-    await this.connect();
-    const ctx = this.ctx!;
-    const ac = new AbortController();
-    this.abort = ac;
-    let res: Response;
-    try {
-      res = await fetch("/api/voice/speak", {
-        method: "POST",
-        headers: { ...(await authHeader()), "Content-Type": "application/json" },
-        body: JSON.stringify({ interviewId: this.interviewId, text, provider: this.id }),
-        signal: ac.signal,
-      });
-    } catch {
-      if (ac.signal.aborted) return;
-      throw new VoiceProviderError("network");
-    }
-    if (!res.ok || !res.body) throw errFor(res.status);
-    let playhead = 0;
-    let pending = new Uint8Array(0);
-    let last: Promise<void> = Promise.resolve();
+    const generation = ++this.generation;
+    this.stopActive();
+    const startedAt = performance.now();
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      this.stopActive();
+      controller.abort();
+    }, TTS_TIMEOUT_MS);
+    this.abort = controller;
     let played = 0;
+    const sourceCompletions: Promise<void>[] = [];
     try {
-      await readSSE(res, (p) => {
-        if (p.type === "error" || p.error) throw new VoiceProviderError("unavailable");
-        if (p.type !== "speech.audio.delta" || !p.audio) return;
-        const inc = Uint8Array.from(atob(p.audio), (c) => c.charCodeAt(0));
+      await this.connect();
+      if (generation !== this.generation) return;
+      const ctx = this.ctx!;
+      const responseStartedAt = performance.now();
+      let res: Response;
+      try {
+        res = await fetch("/api/voice/speak", {
+          method: "POST",
+          headers: { ...(await authHeader()), "Content-Type": "application/json" },
+          body: JSON.stringify({ interviewId: this.interviewId, text, provider: this.id }),
+          signal: controller.signal,
+        });
+      } catch {
+        if (generation !== this.generation) return;
+        if (timedOut) throw new VoiceProviderError("network", "Speech request timed out.");
+        throw new VoiceProviderError("network");
+      }
+      console.info("[voice-timing] phase=tts_response duration_ms=" + Math.round(performance.now() - responseStartedAt));
+      if (!res.ok) throw errFor(res.status);
+      let playhead = 0;
+      let hasScheduledAudio = false;
+      let pending = new Uint8Array(0);
+      let firstAudioReceived = false;
+      let firstPlaybackScheduled = false;
+      let playbackStartedAt: number | null = null;
+      await readSSE(res, (payload) => {
+        if (generation !== this.generation) return;
+        if (payload.type === "error" || payload.error) throw new VoiceProviderError("unavailable");
+        if (payload.type !== "speech.audio.delta") return;
+        if (typeof payload.audio !== "string" || !payload.audio || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(payload.audio)) {
+          throw new VoiceProviderError("unavailable", "Malformed PCM audio event.");
+        }
+        const inc = Uint8Array.from(atob(payload.audio), (c) => c.charCodeAt(0));
+        if (!firstAudioReceived) {
+          firstAudioReceived = true;
+          console.info("[voice-timing] phase=first_tts_audio_received duration_ms=" + Math.round(performance.now() - responseStartedAt));
+        }
         const bytes = new Uint8Array(pending.length + inc.length);
         bytes.set(pending);
         bytes.set(inc, pending.length);
@@ -114,28 +203,61 @@ export class ServerSpeechProvider implements VoiceProvider {
         pending = bytes.slice(usable);
         if (!samples.length) return;
         played += samples.length;
-        const buf = ctx.createBuffer(1, samples.length, 24000);
-        buf.copyToChannel(samples, 0);
-        const src = ctx.createBufferSource();
-        src.buffer = buf;
-        src.connect(ctx.destination);
-        this.sources.add(src);
-        last = new Promise((r) => {
-          src.onended = () => {
-            this.sources.delete(src);
-            r();
-          };
-        });
-        playhead = Math.max(playhead, ctx.currentTime + 0.05);
-        src.start(playhead);
-        playhead += buf.duration;
+        const buffer = ctx.createBuffer(1, samples.length, 24000);
+        buffer.copyToChannel(samples, 0);
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        this.sources.add(source);
+        sourceCompletions.push(
+          new Promise<void>((resolve) => {
+            source.onended = () => {
+              this.sources.delete(source);
+              resolve();
+            };
+          }),
+        );
+        if (!hasScheduledAudio) {
+          playhead = ctx.currentTime + 0.12;
+          hasScheduledAudio = true;
+          playbackStartedAt = performance.now();
+          if (!firstPlaybackScheduled) {
+            firstPlaybackScheduled = true;
+            console.info("[voice-timing] phase=first_audible_playback_estimated duration_ms=" + Math.round(playbackStartedAt - responseStartedAt + 120));
+          }
+        }
+        source.start(playhead);
+        playhead += buffer.duration;
       });
-    } catch (e) {
-      if (ac.signal.aborted) return;
-      throw e instanceof VoiceProviderError ? e : new VoiceProviderError("network");
+      if (generation !== this.generation) return;
+      if (pending.length !== 0) throw new VoiceProviderError("unavailable", "Incomplete PCM audio sample.");
+      if (!played) throw new VoiceProviderError("unavailable", "No PCM audio was received.");
+      const aborted = new Promise<void>((resolve) => {
+        if (controller.signal.aborted) {
+          resolve();
+          return;
+        }
+        controller.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      await Promise.race([Promise.all(sourceCompletions), aborted]);
+      if (generation !== this.generation) return;
+      if (timedOut) throw new VoiceProviderError("network", "Speech playback timed out.");
+      console.info("[voice-timing] phase=full_response_playback duration_ms=" + Math.round(performance.now() - responseStartedAt));
+      if (playbackStartedAt != null) {
+        console.info("[voice-timing] phase=playback duration_ms=" + Math.round(performance.now() - playbackStartedAt));
+      }
+    } catch (error) {
+      if (generation !== this.generation) return;
+      if (timedOut) throw new VoiceProviderError("network", "Speech request timed out.");
+      if (error instanceof VoiceProviderError) throw error;
+      throw new VoiceProviderError("unavailable");
+    } finally {
+      clearTimeout(timeout);
+      if (generation === this.generation) {
+        this.stopActive();
+        console.info("[voice-timing] phase=tts_total duration_ms=" + Math.round(performance.now() - startedAt));
+      }
     }
-    if (!played && !ac.signal.aborted) throw new VoiceProviderError("unavailable");
-    await last;
   }
   transcribe(audio: Blob, onPartial: (t: string) => void) {
     return transcribeSegment(this.interviewId, "lovable", audio, onPartial);
@@ -159,10 +281,23 @@ export class BrowserSpeechProvider implements VoiceProvider {
   speak(text: string) {
     return new Promise<void>((resolve) => {
       const u = new SpeechSynthesisUtterance(text);
+      const startedAt = performance.now();
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        console.info("[voice-timing] phase=browser_playback duration_ms=" + Math.round(performance.now() - startedAt));
+        resolve();
+      };
+      const timeout = setTimeout(() => {
+        window.speechSynthesis.cancel();
+        finish();
+      }, TTS_TIMEOUT_MS);
       u.lang = voiceConfig.language;
       u.rate = voiceConfig.speed;
-      u.onend = () => resolve();
-      u.onerror = () => resolve();
+      u.onend = finish;
+      u.onerror = finish;
       window.speechSynthesis.speak(u);
     });
   }

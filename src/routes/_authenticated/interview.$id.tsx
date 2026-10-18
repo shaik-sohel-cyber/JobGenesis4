@@ -33,6 +33,13 @@ type LiveState = "ready" | "speaking" | "listening" | "processing" | "preparing"
 
 const AUDIO_CHECK_TEXT = "Before we begin, I want to make sure you can hear me clearly. Can you hear me?";
 const CONFIRM_TEXT = "Perfect. Let's begin.";
+type PendingSubmission = {
+  questionId: string;
+  answer: string;
+  durationSeconds: number;
+  turnId: string;
+  submitted: boolean;
+};
 
 const LIVE_LABEL: Record<LiveState, string> = {
   ready: "Ready",
@@ -138,14 +145,28 @@ function InterviewPage() {
   const mic = useRef<Microphone | null>(null);
   const spoken = useRef<Set<string>>(new Set());
   const busy = useRef(false);
+  const resumeListeningAfterAdvance = useRef(false);
+  const transcribing = useRef(false);
   const shownAt = useRef(Date.now());
+  const answerEndedAt = useRef<number | null>(null);
   const turnIds = useRef<Map<string, string>>(new Map());
+  const pendingSubmission = useRef<PendingSubmission | null>(null);
   const transition = useRef(false);
   const resumed = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["interview", id] });
   const moveTo = (state: SessionState) => setState({ data: { interviewId: id, state } });
+  const releaseAdvanceBusy = useCallback(() => {
+    busy.current = false;
+    if (resumeListeningAfterAdvance.current) {
+      resumeListeningAfterAdvance.current = false;
+      if (stageRef.current === "live" && mic.current && !mic.current.aiSpeaking) {
+        mic.current.listening = true;
+        setLive("listening");
+      }
+    }
+  }, []);
 
   // Pick the initial screen once, from the stored session state.
   useEffect(() => {
@@ -160,17 +181,83 @@ function InterviewPage() {
   }, [iv]);
 
   const runAdvance = useCallback(async () => {
+    const startedAt = performance.now();
     setError(null);
     setLive("preparing");
-    const r = await advance({ data: { interviewId: id, phase: "interview" } });
-    await refresh();
-    if (!r.ok) {
-      setError(r.message);
+    try {
+      const r = await advance({ data: { interviewId: id, phase: "interview" } });
+      if (!r.ok) {
+        await refresh();
+        setError(r.message);
+        setLive("error");
+        return false;
+      }
+      // Score the previous answer in the background while the candidate hears the next question.
+      void advance({ data: { interviewId: id, phase: "analyze" } }).catch((error) => {
+        console.error("[interview] background analysis request failed", error);
+      });
+      const refreshPromise = refresh();
+      let shouldResumeListening = false;
+      const question = r.nextQuestion;
+      const manager = mgr.current;
+      const microphone = mic.current;
+      if (question && manager && microphone && stageRef.current === "live") {
+        await refreshPromise;
+      }
+      const refreshedInterview = qc.getQueryData<typeof iv>(["interview", id]);
+      const questionIsCurrent =
+        !!question &&
+        (refreshedInterview?.pendingQuestionId === question.id ||
+          (question.closing &&
+            refreshedInterview?.status === "completed" &&
+            refreshedInterview.messages.some((message) => message.id === question.id)));
+      if (
+        question &&
+        questionIsCurrent &&
+        manager &&
+        microphone &&
+        stageRef.current === "live" &&
+        !spoken.current.has(question.id)
+      ) {
+        spoken.current.add(question.id);
+        microphone.listening = false;
+        microphone.aiSpeaking = true;
+        setLive("speaking");
+        const result = await manager.speak(question.text).finally(() => {
+          if (mgr.current === manager) microphone.aiSpeaking = false;
+        });
+        if (result !== "interrupted" && mgr.current === manager && stageRef.current === "live") {
+          shownAt.current = Date.now();
+          if (result === "completed" && answerEndedAt.current !== null) {
+            console.info(
+              "[voice-timing] phase=end_of_speech_to_response_complete duration_ms=" +
+                Math.round(performance.now() - answerEndedAt.current),
+            );
+            answerEndedAt.current = null;
+          }
+          if (question.closing) {
+            microphone.acceptingAnswers = false;
+            void microphone.stop();
+            if (mic.current === microphone) mic.current = null;
+            setStage("ended");
+          } else if (result === "completed") {
+            shouldResumeListening = true;
+          } else {
+            setLive("voice_lost");
+          }
+        }
+      }
+      await refreshPromise;
+      if (shouldResumeListening) resumeListeningAfterAdvance.current = true;
+      return true;
+    } catch (error) {
+      console.error("[interview] question generation request failed", error);
+      setError("We couldn't continue the interview. Please try again.");
       setLive("error");
-      return;
+      return false;
+    } finally {
+      console.info("[voice-timing] phase=interview_turn_completion duration_ms=" + Math.round(performance.now() - startedAt));
     }
-    // Score the previous answer in the background while the candidate hears the next question.
-    void advance({ data: { interviewId: id, phase: "analyze" } }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -179,9 +266,10 @@ function InterviewPage() {
     const cur = ivRef.current;
     const q = cur?.messages.find((m) => m.id === cur.pendingQuestionId);
     const microphone = mic.current;
+    const manager = mgr.current;
     setPartial("");
     setError(null);
-    if (!q || !mgr.current) return;
+    if (!q || !manager) return;
     const line = intent === "repeat" ? `Sure, let me repeat that. ${q.text}` : "Of course, take your time. I'm listening whenever you're ready.";
     setNote(intent === "repeat" ? "Repeating the question…" : "Take your time — we'll listen when you're ready.");
     if (microphone) {
@@ -189,13 +277,14 @@ function InterviewPage() {
       microphone.aiSpeaking = true;
     }
     setLive("speaking");
-    await mgr.current.speak(line);
+    const result = await manager.speak(line);
+    if (result === "interrupted" || mgr.current !== manager || stageRef.current !== "live") return;
     if (microphone) {
       microphone.aiSpeaking = false;
       microphone.listening = true;
     }
     if (intent === "repeat") shownAt.current = Date.now();
-    setLive("listening");
+    setLive(result === "completed" ? "listening" : "voice_lost");
     setTimeout(() => setNote(null), 4000);
   }, []);
 
@@ -203,6 +292,7 @@ function InterviewPage() {
     async (answer: string, durationSeconds: number) => {
       const cur = ivRef.current;
       if (stageRef.current !== "live" || !cur?.pendingQuestionId || busy.current || !answer.trim()) return;
+      answerEndedAt.current ??= performance.now();
       const intent = detectMetaIntent(answer);
       if (intent) {
         await handleMeta(intent);
@@ -216,23 +306,37 @@ function InterviewPage() {
         turnId = crypto.randomUUID();
         turnIds.current.set(qid, turnId);
       }
-      setPendingAnswer(answer);
-      setPartial("");
-      setLive("processing");
-      const r = await submit({ data: { interviewId: id, questionId: qid, answer, durationSeconds, turnId } });
-      if (!r.ok) {
-        setPendingAnswer(null);
-        setError(r.message);
-        setLive("error");
+      if (pendingSubmission.current) {
         busy.current = false;
         return;
       }
-      await runAdvance();
-      setPendingAnswer(null);
-      busy.current = false;
+      const pending: PendingSubmission = { questionId: qid, answer, durationSeconds, turnId, submitted: false };
+      pendingSubmission.current = pending;
+      setPendingAnswer(answer);
+      setPartial("");
+      setLive("processing");
+      try {
+        const r = await submit({
+          data: { interviewId: id, questionId: qid, answer, durationSeconds, turnId },
+        });
+        if (!r.ok) {
+          setError(r.message);
+          setLive("error");
+          return;
+        }
+        pending.submitted = true;
+        setPendingAnswer(null);
+        if (await runAdvance()) pendingSubmission.current = null;
+      } catch (error) {
+        console.error("[interview] answer submission failed", error);
+        setError("We couldn't save your answer. Please try again.");
+        setLive("error");
+      } finally {
+        releaseAdvanceBusy();
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [id, runAdvance, handleMeta],
+    [id, runAdvance, handleMeta, releaseAdvanceBusy],
   );
 
   /** Opens the voice session and microphone. The microphone stays gated until the interview is live. */
@@ -261,8 +365,12 @@ function InterviewPage() {
             setLive("listening");
           }
         },
-        onTurnEnd: async (audio) => {
-          if (stageRef.current !== "live" || busy.current || !ivRef.current?.pendingQuestionId) return;
+        onTurnEnd: async (audio, durationMs) => {
+          if (stageRef.current !== "live" || busy.current || transcribing.current || !ivRef.current?.pendingQuestionId) return;
+          answerEndedAt.current = performance.now();
+          console.info("[voice-timing] phase=end_of_speech duration_ms=" + Math.round(durationMs));
+          transcribing.current = true;
+          microphone.listening = false;
           setLive("processing");
           setPartial("Got it — thinking…");
           try {
@@ -270,6 +378,7 @@ function InterviewPage() {
             if (!text) {
               setPartial("");
               setLive("listening");
+              microphone.listening = true;
               return;
             }
             await sendAnswer(text, Math.round((Date.now() - shownAt.current) / 1000));
@@ -277,6 +386,9 @@ function InterviewPage() {
             setPartial("");
             setError("We couldn't catch that. Please try answering again, or type your answer.");
             setLive("listening");
+            microphone.listening = true;
+          } finally {
+            transcribing.current = false;
           }
         },
       });
@@ -291,8 +403,9 @@ function InterviewPage() {
   async function runAudioCheck() {
     setStage("audio_check");
     await moveTo("AUDIO_CHECK");
-    const ok = await mgr.current!.speak(AUDIO_CHECK_TEXT);
-    if (!ok) {
+    const result = await mgr.current!.speak(AUDIO_CHECK_TEXT);
+    if (result === "interrupted") return;
+    if (result !== "completed") {
       await moveTo("AUDIO_FAILED");
       setStage("audio_failed");
       return;
@@ -413,10 +526,10 @@ function InterviewPage() {
     }
     if (iv.status !== "completed" && !iv.pendingQuestionId && live !== "error") {
       busy.current = true;
-      void runAdvance().finally(() => (busy.current = false));
+      void runAdvance().finally(releaseAdvanceBusy);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [iv, stage]);
+  }, [iv, stage, releaseAdvanceBusy]);
 
   // Speak each new interviewer message exactly once, only during the live interview.
   useEffect(() => {
@@ -432,7 +545,9 @@ function InterviewPage() {
       setLive("speaking");
       microphone.listening = false;
       microphone.aiSpeaking = true;
-      const ok = await m.speak(lastAi.text);
+      const result = await m.speak(lastAi.text);
+      const currentMessage = [...(ivRef.current?.messages ?? [])].reverse().find((x) => x.role === "ai");
+      if (result === "interrupted" || mgr.current !== m || currentMessage?.id !== lastAi.id) return;
       microphone.aiSpeaking = false;
       shownAt.current = Date.now();
       if (ivRef.current?.status === "completed") {
@@ -442,13 +557,15 @@ function InterviewPage() {
         setStage("ended");
         return;
       }
-      if (!ok) {
+      if (result !== "completed") {
         setLive("voice_lost");
         return;
       }
       if (!busy.current) {
         microphone.listening = true;
         setLive((s) => (s === "processing" ? s : "listening"));
+      } else {
+        resumeListeningAfterAdvance.current = true;
       }
     })();
   }, [iv, stage]);
@@ -465,6 +582,41 @@ function InterviewPage() {
 
   async function retry() {
     setError(null);
+    const pending = pendingSubmission.current;
+    if (pending) {
+      if (busy.current) return;
+      busy.current = true;
+      if (mic.current) mic.current.listening = false;
+      setLive("processing");
+      try {
+        if (!pending.submitted) {
+          const r = await submit({
+            data: {
+              interviewId: id,
+              questionId: pending.questionId,
+              answer: pending.answer,
+              durationSeconds: pending.durationSeconds,
+              turnId: pending.turnId,
+            },
+          });
+          if (!r.ok) {
+            setError(r.message);
+            setLive("error");
+            return;
+          }
+          pending.submitted = true;
+          setPendingAnswer(null);
+        }
+        if (await runAdvance()) pendingSubmission.current = null;
+      } catch (error) {
+        console.error("[interview] answer retry failed", error);
+        setError("We couldn't continue the interview. Please try again.");
+        setLive("error");
+      } finally {
+        busy.current = false;
+      }
+      return;
+    }
     if (ivRef.current?.pendingQuestionId) {
       setLive("listening");
       if (mic.current) mic.current.listening = true;

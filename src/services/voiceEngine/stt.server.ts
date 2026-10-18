@@ -4,6 +4,28 @@ import { UpstreamError } from "./tts.server";
 
 const env = (k: string) => process.env[k] || "";
 
+export type TranscriptionHints = {
+  candidateName: string | null;
+  terms: string[];
+};
+
+function groqPrompt(hints: TranscriptionHints): string | null {
+  const clean = (value: string) =>
+    value.normalize("NFKC").replace(/[^\p{L}\p{N} .+'#&/-]/gu, "").replace(/\s+/g, " ").trim().slice(0, 48);
+  const name = hints.candidateName ? clean(hints.candidateName) : "";
+  const terms = [...new Set(hints.terms.map(clean).filter(Boolean))];
+  let prompt = "Transcribe faithfully. Use supplied spellings only for names and technical terms; do not add words.";
+  if (name) prompt += ` Candidate name: ${name}.`;
+  const included: string[] = [];
+  for (const term of terms) {
+    const next = `${prompt}${included.length ? "," : " Terms:"} ${term}`;
+    if (next.length > 200) break;
+    prompt = next;
+    included.push(term);
+  }
+  return name || included.length ? prompt : null;
+}
+
 async function ok(res: Response, name: string) {
   if (!res.ok) {
     console.error(`[voice] ${name} stt failed`, res.status, (await res.text().catch(() => "")).slice(0, 300));
@@ -16,6 +38,7 @@ export async function transcribe(
   provider: Exclude<SttProviderId, "lovable">,
   file: File,
   signal: AbortSignal,
+  hints: TranscriptionHints,
 ): Promise<string> {
   switch (provider) {
     case "deepgram": {
@@ -37,6 +60,8 @@ export async function transcribe(
       f.append("file", file);
       f.append("language", voiceConfig.language);
       f.append("response_format", "json");
+      const prompt = groqPrompt(hints);
+      if (prompt) f.append("prompt", prompt);
       const res = await ok(
         await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
           method: "POST",

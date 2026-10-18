@@ -4,7 +4,18 @@ import { z } from "zod";
 
 const GENERIC = "Something went wrong with the interview. Please try again.";
 
-type Result = { ok: true } | { ok: false; message: string };
+type Result =
+  | { ok: true; nextQuestion?: { id: string; text: string; closing: boolean } }
+  | { ok: false; message: string };
+
+async function timedInterviewPhase<T>(phase: string, run: () => Promise<T>): Promise<T> {
+  const startedAt = performance.now();
+  try {
+    return await run();
+  } finally {
+    console.info(`[voice-timing] phase=${phase} duration_ms=${Math.round(performance.now() - startedAt)}`);
+  }
+}
 
 /** Creates an interview for a completed, owned resume. Planning runs on the interview page. */
 export const startInterview = createServerFn({ method: "POST" })
@@ -144,16 +155,22 @@ export const advanceInterview = createServerFn({ method: "POST" })
 
     const eng = await import("@/services/interviewEngine/orchestrator.server");
     try {
-      await eng.runPlanning(supabase, interview);
+      if (data.phase !== "analyze") {
+        await timedInterviewPhase("planning", () => eng.runPlanning(supabase, interview));
+      }
       if (data.phase === "analyze") {
         // Background pass fired by the client after the next question is shown.
-        await eng.runPendingAnalysis(supabase, interview, { skipLatest: true });
+        await timedInterviewPhase("answer_analysis", () =>
+          eng.runPendingAnalysis(supabase, interview, { skipLatest: true }),
+        );
         return { ok: true };
       }
       if (data.phase === "interview") {
-        // Older answers are normally analyzed already; the latest is analyzed after asking.
-        await eng.runPendingAnalysis(supabase, interview, { skipLatest: true });
-        await eng.runNextQuestion(supabase, interview);
+        // The question generator uses its length heuristic while answer analysis runs in the background.
+        const nextQuestion = await timedInterviewPhase("question_generation", () =>
+          eng.runNextQuestion(supabase, interview),
+        );
+        return { ok: true, nextQuestion: nextQuestion ?? undefined };
       }
       return { ok: true };
     } catch (error) {

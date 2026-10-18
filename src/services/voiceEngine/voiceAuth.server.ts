@@ -16,13 +16,13 @@ export async function verifyVoiceCaller(request: Request, interviewId: string | 
   if (!userId) return null;
   const { data: iv } = await sb
     .from("interviews")
-    .select("id, user_id, resume_id, status")
+    .select("id, user_id, resume_id, status, target_role, required_skills")
     .eq("id", interviewId)
     .maybeSingle();
   if (!iv || iv.user_id !== userId) return null;
   const { data: resume } = await sb.from("resumes").select("id, user_id").eq("id", iv.resume_id).maybeSingle();
   if (!resume || resume.user_id !== userId) return null;
-  return { userId, interview: iv };
+  return { userId, interview: iv, client: sb };
 }
 
 export const GATEWAY = "https://ai.gateway.lovable.dev";

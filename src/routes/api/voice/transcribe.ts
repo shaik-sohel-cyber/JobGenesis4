@@ -20,20 +20,47 @@ export const Route = createFileRoute("/api/voice/transcribe")({
         const { verifyVoiceCaller, GATEWAY } = await import("@/services/voiceEngine/voiceAuth.server");
         const caller = await verifyVoiceCaller(request, interviewId);
         if (!caller) return new Response("Unauthorized", { status: 401 });
+        const { enabledProviders, UpstreamError } = await import("@/services/voiceEngine/tts.server");
+        const enabled = enabledProviders();
 
         const type = file.type.replace(/^video\//, "audio/") || "audio/webm";
         const audio = new File([file], "answer.webm", { type: type.startsWith("audio/") ? type : "audio/webm" });
+        let transcriptionHints: { candidateName: string | null; terms: string[] } = { candidateName: null, terms: [] };
+        if (provider === "groq" || (provider === "auto" && enabled.stt.groq)) {
+          const [profileResult, skillsResult, projectsResult] = await Promise.all([
+            caller.client.from("profiles").select("full_name").eq("id", caller.userId).maybeSingle(),
+            caller.client.from("resume_skills").select("name").eq("resume_id", caller.interview.resume_id).limit(12),
+            caller.client.from("resume_projects").select("name, technologies").eq("resume_id", caller.interview.resume_id).limit(8),
+          ]);
+          for (const [source, error] of [
+            ["profile", profileResult.error],
+            ["skills", skillsResult.error],
+            ["projects", projectsResult.error],
+          ] as const) {
+            if (error) console.error(`[voice] ${source} transcription context unavailable`, error.message);
+          }
+          transcriptionHints = {
+            candidateName: profileResult.data?.full_name ?? null,
+            terms: [
+              caller.interview.target_role,
+              ...(caller.interview.required_skills ?? []),
+              ...(skillsResult.data ?? []).map((skill) => skill.name),
+              ...(projectsResult.data ?? []).flatMap((project) => [
+                project.name,
+                ...(Array.isArray(project.technologies) ? project.technologies : []),
+              ]),
+            ].filter((term): term is string => typeof term === "string"),
+          };
+        }
 
         if (provider === "auto") {
-          const { enabledProviders, UpstreamError } = await import("@/services/voiceEngine/tts.server");
           const { transcribe } = await import("@/services/voiceEngine/stt.server");
-          const enabled = enabledProviders();
           const providers = voiceConfig.sttOrder.filter(
             (id): id is Exclude<SttProviderId, "lovable"> => id !== "lovable" && enabled.stt[id],
           );
           for (const candidate of providers) {
             try {
-              const text = await transcribe(candidate, audio, request.signal);
+              const text = await transcribe(candidate, audio, request.signal, transcriptionHints);
               return new Response(
                 `data: ${JSON.stringify({ type: "transcript.text.done", text })}\n\n`,
                 { headers: SSE },
@@ -47,11 +74,10 @@ export const Route = createFileRoute("/api/voice/transcribe")({
           }
           if (!enabled.stt.lovable) return new Response("Transcription unavailable", { status: 503 });
         } else if (provider !== "lovable") {
-          const { enabledProviders, UpstreamError } = await import("@/services/voiceEngine/tts.server");
-          if (!enabledProviders().stt[provider]) return new Response("Provider not enabled", { status: 503 });
+          if (!enabled.stt[provider]) return new Response("Provider not enabled", { status: 503 });
           const { transcribe } = await import("@/services/voiceEngine/stt.server");
           try {
-            const text = await transcribe(provider, audio, request.signal);
+            const text = await transcribe(provider, audio, request.signal, transcriptionHints);
             return new Response(`data: ${JSON.stringify({ type: "transcript.text.done", text })}\n\n`, { headers: SSE });
           } catch (e) {
             const s = e instanceof UpstreamError ? e.status : 502;

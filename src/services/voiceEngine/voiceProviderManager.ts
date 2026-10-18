@@ -1,16 +1,16 @@
 import { VoiceProviderError, type VoiceProvider } from "./provider";
-import { BrowserSpeechProvider, ServerSpeechProvider, fetchEnabledProviders, transcribeSegment } from "./providers";
+import { BrowserSpeechProvider, ServerSpeechProvider, transcribeSegment } from "./providers";
 import { voiceConfig, type SttProviderId, type VoiceProviderId } from "./voiceConfig";
 
-export type ProviderStatus = { provider: VoiceProviderId; reconnecting: boolean };
+export type ProviderStatus = { provider: VoiceProviderId | "auto"; reconnecting: boolean };
 
 /**
- * Builds voice + transcription fallback chains from the services that have keys,
- * retries once, then falls back. Never surfaces raw provider errors.
+ * Tries the configured voice and transcription providers in order. Unavailable
+ * providers fail over without exposing configured provider status to candidates.
  */
 export class VoiceProviderManager {
   private chain: VoiceProvider[] = [];
-  private stt: SttProviderId[] = ["lovable"];
+  private stt: Array<SttProviderId | "auto"> = ["auto"];
   private idx = 0;
   private sttIdx = 0;
   private ready: Promise<void> | null = null;
@@ -23,13 +23,11 @@ export class VoiceProviderManager {
   }
   private init() {
     this.ready ??= (async () => {
-      const enabled = await fetchEnabledProviders();
-      this.chain = voiceConfig.ttsOrder
-        .filter((p) => enabled.tts[p])
-        .map((p) => (p === "browser" ? new BrowserSpeechProvider(this.interviewId) : new ServerSpeechProvider(this.interviewId, p)))
-        .filter((p) => p.isAvailable());
-      const stt = voiceConfig.sttOrder.filter((p) => enabled.stt[p]);
-      this.stt = stt.length ? stt : ["lovable"];
+      this.chain = [
+        new ServerSpeechProvider(this.interviewId, "auto"),
+        new BrowserSpeechProvider(this.interviewId),
+      ].filter((p) => p.isAvailable());
+      this.stt = ["auto"];
       this.emit(false);
     })();
     return this.ready;
@@ -79,7 +77,7 @@ export class VoiceProviderManager {
         const kind = e instanceof VoiceProviderError ? e.kind : "unavailable";
         if (kind === "auth") throw e;
         this.emit(true);
-        if (!retried) {
+        if (!retried && kind !== "unavailable") {
           retried = true;
           await new Promise((r) => setTimeout(r, kind === "rate_limit" ? 2500 : 1200));
           continue;

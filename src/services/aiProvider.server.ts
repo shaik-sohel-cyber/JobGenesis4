@@ -387,6 +387,12 @@ export type CapacityView = {
   keys: Array<{ label: string; openModels: number; totalModels: number; requestsToday: number }>;
 };
 
+/** Candidate-safe capacity check; does not return quota or provider details. */
+export async function isInterviewCapacityFull(): Promise<boolean> {
+  if (geminiKeys().length === 0) return false;
+  return (await nextPair()) === null;
+}
+
 /** Numbers for the settings screen: what is connected and what is still open. */
 export async function capacitySummary(): Promise<CapacityView> {
   await loadState(true);

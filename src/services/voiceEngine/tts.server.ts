@@ -1,5 +1,10 @@
 /** Third-party text-to-speech adapters. Each returns raw PCM16 mono 24 kHz bytes. */
-import { voiceConfig, type SttProviderId, type TtsProviderId } from "./voiceConfig";
+import {
+  voiceConfig,
+  type EnabledProviders,
+  type SttProviderId,
+  type TtsProviderId,
+} from "./voiceConfig";
 
 const env = (k: string) => process.env[k] || "";
 
@@ -10,7 +15,7 @@ export function bench(provider: string, ms = 60 * 60 * 1000) {
 }
 const ok_ = (p: string) => (benchedUntil.get(p) ?? 0) < Date.now();
 
-export function enabledProviders() {
+export function enabledProviders(): EnabledProviders {
   const tts: Record<TtsProviderId, boolean> = {
     lovable: !!env("LOVABLE_API_KEY"),
     cartesia: !!env("CARTESIA_API_KEY") && ok_("cartesia"),

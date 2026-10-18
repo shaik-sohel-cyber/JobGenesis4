@@ -19,15 +19,22 @@ function when(iso: string): string {
 
 export function AiCapacity() {
   const [view, setView] = useState<CapacityView | null>(null);
+  const [failed, setFailed] = useState(false);
   const read = useServerFn(getCapacity);
 
   useEffect(() => {
     let active = true;
     read()
       .then((v) => {
-        if (active) setView(v);
+        if (active) {
+          setView(v);
+          setFailed(false);
+        }
       })
-      .catch(() => {});
+      .catch((error: unknown) => {
+        console.error("[admin] Failed to load AI capacity", error);
+        if (active) setFailed(true);
+      });
     return () => {
       active = false;
     };
@@ -41,7 +48,9 @@ export function AiCapacity() {
         charged to this workspace.
       </p>
 
-      {view && view.keysConnected > 0 ? (
+      {failed ? (
+        <p className="mt-4 text-sm text-destructive">Unable to load AI capacity diagnostics.</p>
+      ) : view && view.keysConnected > 0 ? (
         <>
           <div className="mt-4 grid grid-cols-2 gap-3">
             <Stat label="Keys connected" value={String(view.keysConnected)} />

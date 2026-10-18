@@ -2,7 +2,11 @@
 export type TtsProviderId =
   "lovable" | "cartesia" | "elevenlabs" | "deepgram" | "google" | "azure" | "kokoro" | "browser";
 export type SttProviderId = "lovable" | "deepgram" | "groq" | "assemblyai" | "elevenlabs";
-export type VoiceProviderId = TtsProviderId;
+export type VoiceProviderId = TtsProviderId | "auto";
+export type EnabledProviders = {
+  tts: Record<TtsProviderId, boolean>;
+  stt: Record<SttProviderId, boolean>;
+};
 
 export const providerNames: Record<TtsProviderId | SttProviderId, string> = {
   lovable: "Built-in AI",

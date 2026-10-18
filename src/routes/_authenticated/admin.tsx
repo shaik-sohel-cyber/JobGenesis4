@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
 import { AiCapacity } from "@/components/AiCapacity";
+import { AdminDiagnostics } from "@/components/AdminDiagnostics";
 import { getAdminOverview } from "@/lib/admin.functions";
 
 export const Route = createFileRoute("/_authenticated/admin")({
@@ -70,6 +71,7 @@ function Admin() {
               </table>
             </section>
             <AiCapacity />
+            <AdminDiagnostics />
           </>
         )}
       </main>

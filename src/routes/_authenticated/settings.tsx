@@ -3,10 +3,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { AppHeader } from "@/components/AppHeader";
-import { AiCapacity } from "@/components/AiCapacity";
 import { useSession } from "@/hooks/useSession";
-import { services } from "@/services";
-import { voiceConfig, providerNames } from "@/services/voiceEngine/voiceConfig";
 
 export const Route = createFileRoute("/_authenticated/settings")({
   head: () => ({
@@ -117,33 +114,6 @@ function Settings() {
         </section>
 
         <section className="mt-5 rounded-2xl border border-border bg-card p-6 shadow-[var(--shadow-card)]">
-          <h2 className="font-display text-lg font-semibold">What's available</h2>
-          <ul className="mt-4 space-y-2.5">
-            {services.map((s) => (
-              <li key={s.key} className="flex items-start justify-between gap-3 text-sm">
-                <div>
-                  <p className="font-medium">{s.name}</p>
-                  <p className="text-xs text-muted-foreground">{s.summary}</p>
-                </div>
-                <span
-                  className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                    s.status === "available"
-                      ? "bg-success/15 text-success"
-                      : "bg-secondary text-muted-foreground"
-                  }`}
-                >
-                  {s.status === "available" ? "Available" : "Coming soon"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <VoiceServices />
-
-        <AiCapacity />
-
-        <section className="mt-5 rounded-2xl border border-border bg-card p-6 shadow-[var(--shadow-card)]">
           <h2 className="font-display text-lg font-semibold">Account</h2>
           <button
             type="button"
@@ -155,46 +125,5 @@ function Settings() {
         </section>
       </main>
     </div>
-  );
-}
-
-function VoiceServices() {
-  const [enabled, setEnabled] = useState<{ tts: Record<string, boolean>; stt: Record<string, boolean> } | null>(null);
-  useEffect(() => {
-    fetch("/api/voice/providers").then((r) => (r.ok ? r.json() : null)).then(setEnabled).catch(() => {});
-  }, []);
-  const groups = [
-    { title: "Interviewer voice", ids: voiceConfig.ttsOrder, map: enabled?.tts },
-    { title: "Speech-to-text", ids: voiceConfig.sttOrder, map: enabled?.stt },
-  ];
-  return (
-    <section className="mt-5 rounded-2xl border border-border bg-card p-6 shadow-[var(--shadow-card)]">
-      <h2 className="font-display text-lg font-semibold">Voice services</h2>
-      <p className="mt-1 text-xs text-muted-foreground">Used in this order. If one fails, the next one takes over.</p>
-      {groups.map((g) => (
-        <div key={g.title} className="mt-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{g.title}</p>
-          <ul className="mt-2 space-y-1.5">
-            {g.ids.map((id, i) => {
-              const on = !!g.map?.[id];
-              return (
-                <li key={id} className="flex items-center justify-between gap-3 text-sm">
-                  <span>
-                    {i + 1}. {providerNames[id]}
-                  </span>
-                  <span
-                    className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                      on ? "bg-success/15 text-success" : "bg-secondary text-muted-foreground"
-                    }`}
-                  >
-                    {enabled ? (on ? "Active" : "Needs key") : "…"}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ))}
-    </section>
   );
 }

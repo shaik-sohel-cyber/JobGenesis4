@@ -24,22 +24,10 @@ async function readSSE(res: Response, onEvent: (p: any) => void) {
   }
 }
 
-export type EnabledProviders = { tts: Record<string, boolean>; stt: Record<string, boolean> };
-
-export async function fetchEnabledProviders(): Promise<EnabledProviders> {
-  try {
-    const r = await fetch("/api/voice/providers");
-    if (r.ok) return await r.json();
-  } catch {
-    /* fall through */
-  }
-  return { tts: { lovable: true, browser: true }, stt: { lovable: true } };
-}
-
 /** Transcribes one segment with the given speech-to-text service (server-side keys). */
 export async function transcribeSegment(
   interviewId: string,
-  provider: SttProviderId,
+  provider: SttProviderId | "auto",
   audio: Blob,
   onPartial: (t: string) => void,
 ) {
@@ -71,7 +59,7 @@ export class ServerSpeechProvider implements VoiceProvider {
   private ctx: AudioContext | null = null;
   private sources = new Set<AudioBufferSourceNode>();
   private abort: AbortController | null = null;
-  constructor(private interviewId: string, public id: Exclude<TtsProviderId, "browser">) {}
+  constructor(private interviewId: string, public id: Exclude<TtsProviderId, "browser"> | "auto") {}
   isAvailable() {
     return typeof window !== "undefined" && "AudioContext" in window;
   }

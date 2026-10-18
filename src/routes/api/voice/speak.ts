@@ -1,11 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
-import { voiceConfig } from "@/services/voiceEngine/voiceConfig";
+import { voiceConfig, type TtsProviderId } from "@/services/voiceEngine/voiceConfig";
 
 const Body = z.object({
   interviewId: z.string().uuid(),
   text: z.string().min(1).max(2000),
-  provider: z.enum(["lovable", "cartesia", "elevenlabs", "deepgram", "google", "azure", "kokoro"]).default("lovable"),
+  provider: z.enum(["auto", "lovable", "cartesia", "elevenlabs", "deepgram", "google", "azure", "kokoro"]).default("auto"),
 });
 
 const SSE = { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" };
@@ -19,23 +19,47 @@ export const Route = createFileRoute("/api/voice/speak")({
         const { verifyVoiceCaller, GATEWAY } = await import("@/services/voiceEngine/voiceAuth.server");
         const caller = await verifyVoiceCaller(request, parsed.data.interviewId);
         if (!caller) return new Response("Unauthorized", { status: 401 });
-        const { provider, text } = parsed.data;
+        let { provider } = parsed.data;
+        const { text } = parsed.data;
 
         if (provider !== "lovable") {
           const tts = await import("@/services/voiceEngine/tts.server");
-          if (!tts.enabledProviders().tts[provider]) return new Response("Provider not enabled", { status: 503 });
-          try {
-            const pcm = await tts.synthesize(provider, text, request.signal);
-            return new Response(tts.pcmToSSE(pcm), { headers: SSE });
-          } catch (e) {
-            const s = e instanceof tts.UpstreamError ? e.status : 0;
-            // Bad key or used-up credits: skip this service for now; the browser falls back to the next one.
-            if (s === 401 || s === 402 || s === 403) {
-              tts.bench(provider);
-              return new Response("Provider not enabled", { status: 503 });
+          const enabled = tts.enabledProviders();
+          if (provider === "auto") {
+            const providers = voiceConfig.ttsOrder.filter(
+              (id): id is Exclude<TtsProviderId, "browser" | "lovable"> =>
+                id !== "browser" && id !== "lovable",
+            );
+            for (const candidate of providers) {
+              if (!enabled.tts[candidate]) continue;
+              try {
+                const pcm = await tts.synthesize(candidate, text, request.signal);
+                return new Response(tts.pcmToSSE(pcm), { headers: SSE });
+              } catch (error) {
+                if (request.signal.aborted) return new Response("Voice request cancelled", { status: 499 });
+                if (error instanceof tts.UpstreamError) {
+                  if ([401, 402, 403, 429].includes(error.status)) tts.bench(candidate);
+                } else {
+                  console.error(`[voice] ${candidate} TTS failed`, error);
+                }
+              }
             }
-            if (s === 429) return new Response("Voice busy", { status: 429 });
-            return new Response("Voice unavailable", { status: 503 });
+            if (!enabled.tts.lovable) return new Response("Voice unavailable", { status: 503 });
+            provider = "lovable";
+          } else {
+            if (!enabled.tts[provider]) return new Response("Provider not enabled", { status: 503 });
+            try {
+              const pcm = await tts.synthesize(provider, text, request.signal);
+              return new Response(tts.pcmToSSE(pcm), { headers: SSE });
+            } catch (error) {
+              const status = error instanceof tts.UpstreamError ? error.status : 0;
+              if ([401, 402, 403].includes(status)) {
+                tts.bench(provider);
+                return new Response("Provider not enabled", { status: 503 });
+              }
+              if (status === 429) return new Response("Voice busy", { status: 429 });
+              return new Response("Voice unavailable", { status: 503 });
+            }
           }
         }
 

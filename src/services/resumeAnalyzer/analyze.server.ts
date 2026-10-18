@@ -17,7 +17,8 @@ export async function analyzeResumeText(resumeText: string): Promise<ParsedProfi
       validate: (candidate) => parsedProfileSchema.safeParse(candidate).success,
     });
   } catch (error) {
-    if (error instanceof AiPoolError) throw new AnalysisError(error.message);
+    if (error instanceof AiPoolError)
+      throw new AnalysisError("Resume analysis is temporarily unavailable. Please try again later.");
     console.error("[resume] unexpected", error);
     throw new AnalysisError("The analysis service could not process this resume.");
   }

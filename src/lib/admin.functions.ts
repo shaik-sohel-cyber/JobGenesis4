@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { isAdminUser } from "@/lib/admin-auth.server";
 
 export type AdminUserRow = {
   id: string;
@@ -17,13 +18,7 @@ export type AdminOverview =
 export const getAdminOverview = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }): Promise<AdminOverview> => {
-    const { data: role } = await context.supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", context.userId)
-      .eq("role", "admin")
-      .maybeSingle();
-    if (!role) return { authorized: false };
+    if (!(await isAdminUser(context.supabase, context.userId))) return { authorized: false };
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const all: AdminUserRow[] = [];

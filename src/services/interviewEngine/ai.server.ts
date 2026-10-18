@@ -23,7 +23,8 @@ export async function callStructured<T>(opts: {
       validate: (candidate) => opts.validator.safeParse(candidate).success,
     });
   } catch (error) {
-    if (error instanceof AiPoolError) throw new InterviewAIError(error.message);
+    if (error instanceof AiPoolError)
+      throw new InterviewAIError("The interviewer is temporarily unavailable. Please try again later.");
     console.error(`[interview:${opts.name}] unexpected`, error);
     throw new InterviewAIError("The interviewer couldn't respond. Please try again.");
   }

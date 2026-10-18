@@ -856,13 +856,9 @@ function DeviceCheck({
       <p className="mt-4 text-xs text-muted-foreground">Tip: headphones give the smoothest conversation.</p>
       {capacity?.full ? (
         <div className="mt-4 rounded-xl border border-border bg-secondary p-4 text-sm">
-          <p className="font-medium">Today's free interview slots are used up.</p>
+          <p className="font-medium">Interviews are temporarily unavailable.</p>
           <p className="mt-1 text-muted-foreground">
-            The AI runs on free daily allowances, which return{" "}
-            {capacity.resetAt
-              ? `around ${new Date(capacity.resetAt).toISOString().slice(11, 16)} UTC`
-              : "at 00:00 UTC"}
-            . Resume analysis still works — please come back tomorrow for the interview.
+            Resume analysis is still available. Please try starting an interview again later.
           </p>
           <div className="mt-3">
             <Link to="/dashboard" className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-background">
@@ -870,13 +866,6 @@ function DeviceCheck({
             </Link>
           </div>
         </div>
-      ) : capacity ? (
-        capacity.interviewsLeft > 0 ? (
-          <p className="mt-3 text-xs text-muted-foreground">
-            About {capacity.interviewsLeft} interview {capacity.interviewsLeft === 1 ? "slot" : "slots"} left today on
-            the free plan.
-          </p>
-        ) : null
       ) : null}
       <div className="mt-5">
         <PrimaryButton disabled={!allOk || locked || (capacity?.full ?? false)} onClick={onReady}>

@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { isAdminUser } from "@/lib/admin-auth.server";
 import type { CapacityView } from "@/services/aiProvider.server";
 
 /**
@@ -8,30 +9,25 @@ import type { CapacityView } from "@/services/aiProvider.server";
  */
 export const getCapacity = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .handler(async (): Promise<CapacityView> => {
+  .handler(async ({ context }): Promise<CapacityView> => {
+    if (!(await isAdminUser(context.supabase, context.userId))) {
+      throw new Error("Forbidden: administrator access required.");
+    }
     const { capacitySummary } = await import("@/services/aiProvider.server");
     return capacitySummary();
   });
 
-export type InterviewCapacityView = {
-  interviewsLeft: number;
-  /** True when every key/model allowance is benched until its reset time. */
-  full: boolean;
-  keysConnected: number;
-  /** Earliest ISO time a benched allowance returns (null when nothing is benched). */
-  resetAt: string | null;
-};
+export type InterviewCapacityView = { full: boolean };
 
-/** Lightweight view for the interview start screen: slots left today, or "full". */
+/** Candidate-safe availability signal for the interview start screen. */
 export const getInterviewCapacity = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .handler(async (): Promise<InterviewCapacityView> => {
-    const { capacitySummary } = await import("@/services/aiProvider.server");
-    const s = await capacitySummary();
-    return {
-      interviewsLeft: s.estimatedInterviewsLeft,
-      full: s.keysConnected > 0 && s.pairsOpen === 0,
-      keysConnected: s.keysConnected,
-      resetAt: s.nextResetAt,
-    };
+    try {
+      const { isInterviewCapacityFull } = await import("@/services/aiProvider.server");
+      return { full: await isInterviewCapacityFull() };
+    } catch (error) {
+      console.error("[interviewCapacity] availability check failed", error);
+      throw new Error("Interview availability could not be checked. Please try again.");
+    }
   });

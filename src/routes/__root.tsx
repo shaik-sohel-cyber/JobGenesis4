@@ -84,8 +84,25 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         content:
           "JobGenesis turns your resume into a structured, verifiable candidate profile so you know exactly what an interviewer will ask.",
       },
+      { property: "og:title", content: "JobGenesis — Know your resume. Prove your skills." },
+      {
+        property: "og:description",
+        content:
+          "JobGenesis turns your resume into a structured, verifiable candidate profile so you know exactly what an interviewer will ask.",
+      },
       { property: "og:type", content: "website" },
+      { property: "og:site_name", content: "JobGenesis" },
+      { property: "og:url", content: "https://www.jobgenesis.in" },
+      { property: "og:image", content: "https://www.jobgenesis.in/jobgenesis-logo.png" },
+      { property: "og:image:alt", content: "JobGenesis — Prepare, Practice, Progress" },
       { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: "JobGenesis — Know your resume. Prove your skills." },
+      {
+        name: "twitter:description",
+        content:
+          "JobGenesis turns your resume into a structured, verifiable candidate profile so you know exactly what an interviewer will ask.",
+      },
+      { name: "twitter:image", content: "https://www.jobgenesis.in/jobgenesis-logo.png" },
     ],
     links: [
       {
@@ -99,6 +116,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         href: "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap",
       },
       { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
+      { rel: "apple-touch-icon", href: "/apple-touch-icon.png", sizes: "180x180" },
     ],
   }),
   shellComponent: RootShell,

@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppHeader } from "@/components/AppHeader";
+import { Wordmark } from "@/components/brand";
 import { useSession } from "@/hooks/useSession";
 
 export const Route = createFileRoute("/")({
@@ -142,7 +143,10 @@ function Landing() {
 
       <footer className="border-t border-border">
         <div className="mx-auto flex max-w-6xl flex-col gap-2 px-5 py-8 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-          <p>© {new Date().getFullYear()} JobGenesis</p>
+          <div className="flex items-center gap-3">
+            <Wordmark />
+            <span>© {new Date().getFullYear()} JobGenesis</span>
+          </div>
           <p>Resume intelligence for people who want to be ready.</p>
         </div>
       </footer>

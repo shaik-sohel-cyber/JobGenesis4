@@ -1,14 +1,3 @@
-<!-- LOVABLE:BEGIN -->
-> [!IMPORTANT]
-> This project is connected to [Lovable](https://lovable.dev). Avoid rewriting
-> published git history — force pushing, or rebasing/amending/squashing commits
-> that are already pushed — as it rewrites history on Lovable's side and the
-> user will likely lose their project history.
->
-> Commits you push to the connected branch sync back to Lovable and show up in
-> the editor, so keep the branch in a working state.
-<!-- LOVABLE:END -->
-
 ## Project architecture rules
 
 - Resume processing runs in the `processResume` TanStack server function (`src/lib/resume.functions.ts`), not an Edge Function — the app already has a server runtime and needs the caller's session for RLS.
@@ -17,7 +6,7 @@
 - Uploads go straight from the browser to private storage via an XHR request with the user's token, so real upload progress can be shown; RLS still applies.
 - The interview engine is driven by idempotent server functions (`advanceInterview` phases prepare/interview/analyze, `submitAnswer`) that re-derive state from the database; the next question is asked before the latest answer is AI-analyzed (a length heuristic picks follow-ups meanwhile) and the client fires a background "analyze" pass, so candidates never wait for scoring; finishing analyzes everything before closing.
 - Candidates read interviews only through `getInterview`, which strips all evaluation data; AI claim references are indexes mapped server-side to real claim IDs.
-- Voice interview: `src/services/voiceEngine/` only speaks and transcribes (provider interface + fallback manager: Lovable AI speech → ElevenLabs slot → browser voice); answers still flow through `submitAnswer`/`advanceInterview`, so the interview engine stays the single source of truth.
+- Voice interview: `src/services/voiceEngine/` only speaks and transcribes (provider interface + fallback manager: built-in AI speech → ElevenLabs slot → browser voice); answers still flow through `submitAnswer`/`advanceInterview`, so the interview engine stays the single source of truth.
 - Speech/transcription run through `/api/voice/speak` and `/api/voice/transcribe` server routes that verify the bearer token and interview/resume ownership, so SSE audio streams directly and the AI key stays server-side; raw audio is never stored.
 - Voice providers (Cartesia, ElevenLabs, Deepgram, Google, Azure for voice; Deepgram, Groq, AssemblyAI, ElevenLabs for transcription) are server adapters in `voiceEngine/tts.server.ts`/`stt.server.ts`, switched on by the presence of their secret and normalized to the same SSE shape, so the browser has one generic player and fallback order lives in `voiceConfig`.
 - Interview sessions follow a server-validated handshake (`interviews.session_state`, `setSessionState` compare-and-set): device check → audio check → YES → countdown → INTERVIEW_ACTIVE; questions are only generated and answers only accepted once INTERVIEW_ACTIVE, so nothing said during the handshake can become an answer.

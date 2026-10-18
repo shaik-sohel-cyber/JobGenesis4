@@ -27,14 +27,25 @@ This downloads everything the app needs (takes a few minutes the first time). Yo
 
 > If `npm` is not recognized, Node.js was not added to your PATH — reinstall it and restart VS Code.
 
-## 4. The `.env` file (already included)
+## 4. Environment variables
 
-The download includes a `.env` file in the project root. It holds the project's connection details and uses only **publishable (public-safe) keys**.
+Environment files are not included. Create a `.env` file in the project root using your existing Supabase project values. Copy the publishable key from the Supabase project settings; it is intended for browser use. Do not use a secret or service-role key for either `VITE_` variable.
 
-- **Do not delete, rename, or edit it.** The app will not start without it.
-- Do not share this file publicly or commit it to a public repository.
+```sh
+VITE_SUPABASE_URL=https://pxclqsjzoljgjohphzmx.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=your_existing_publishable_key
 
-**Secret API keys are not included.** Keys for Gemini, Groq, Cartesia, Deepgram, ElevenLabs, etc. are stored separately and do not travel with the download. To use them locally, add lines to `.env` yourself, for example:
+# Server-side Supabase settings used by authenticated server functions.
+SUPABASE_URL=https://pxclqsjzoljgjohphzmx.supabase.co
+SUPABASE_PUBLISHABLE_KEY=your_existing_publishable_key
+
+# Server-only: required by privileged admin operations. Never add a VITE_ prefix.
+SUPABASE_SERVICE_ROLE_KEY=your_existing_service_role_key
+```
+
+The Vite build supports existing Vercel settings named `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` for the browser client as a compatibility fallback. Prefer `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` for new deployment configuration. Keep `SUPABASE_SERVICE_ROLE_KEY` server-only.
+
+**Other secret API keys are not included.** Keys for Gemini, Groq, Cartesia, Deepgram, ElevenLabs, etc. are stored separately. To use them locally, add the ones you already have to `.env`, for example:
 
 ```sh
 GEMINI_API_KEY=your_key_here
@@ -82,7 +93,7 @@ Press **Ctrl+C** in the terminal (Cmd+C on Mac). Run `npm run dev` again any tim
 
 ## 9. Troubleshooting
 
-- **"Missing Supabase environment variable(s)"** — the `.env` file is missing, renamed, or you opened the wrong folder. Restore it from the download and reopen the correct folder.
+- **"Missing Supabase environment variable(s)"** — create the root `.env` file with the public `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` values shown in step 4, then restart the dev server.
 - **Port already in use** — another app is on that port. Close the other terminal running the app, or run `npm run dev -- --port 3000` to use a different port.
 - **`npm install` fails** — delete the `node_modules` folder and `package-lock.json` if present, then run `npm install` again.
 - **Microphone or camera not working** — the browser asks for permission the first time; allow it. Camera analysis only works on `localhost` or an HTTPS site.
